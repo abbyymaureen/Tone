@@ -88,12 +88,14 @@ public class Tone {
         try (BufferedReader br = new BufferedReader(new FileReader(filename))) {
             String line;
             while ((line = br.readLine()) != null) {
+                // Split each line into two parts: note and duration
                 String[] parts = line.split(" ");
                 if (parts.length != 2) continue;
 
                 String noteStr = parts[0].trim();
                 int durationValue;
 
+                // Try to parse the duration value as an integer
                 try {
                     durationValue = Integer.parseInt(parts[1].trim());
                 } catch (NumberFormatException f) {
@@ -102,6 +104,7 @@ public class Tone {
                 }
 
                 Note note;
+                // Try to convert the string to a valid Note enum value
                 try {
                     note = Note.valueOf(noteStr);
                 } catch (IllegalArgumentException e) {
@@ -109,6 +112,7 @@ public class Tone {
                     continue;
                 }
 
+                // Map the numeric duration to a NoteLength enum
                 NoteLength length = mapDurationToNoteLength(durationValue);
                 if (length == null) {
                     System.out.println("Skipping invalid duration: " + durationValue);
