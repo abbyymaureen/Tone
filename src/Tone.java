@@ -1,12 +1,14 @@
 import java.io.BufferedReader;
+import java.io.FileNotFoundException;
 import java.io.FileReader;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
-import javax.sound.sampled.AudioFormat;
-import javax.sound.sampled.AudioSystem;
-import javax.sound.sampled.LineUnavailableException;
-import javax.sound.sampled.SourceDataLine;
+import javax.sound.sampled.*;
 
 public class Tone {
 
@@ -14,12 +16,20 @@ public class Tone {
         final AudioFormat af = new AudioFormat(Note.SAMPLE_RATE, 8, 1, true, false);
         Tone t = new Tone(af);
 
-        // Path to the song file
-        String filename = "songs/prelude.txt";
+        String filename = args.length > 0 ? args[0] : "songs/prelude.txt";
 
         System.out.println("Playing song from file: " + filename);
-        t.playSongFromFile(filename);
-        System.out.println("Finished playing.");
+
+        // Run playback in a separate thread
+        new Thread(() -> {
+            try {
+                t.playSongFromFile(filename);
+            } catch (LineUnavailableException e) {
+                e.printStackTrace();
+            }
+        }).start();
+
+        System.out.println("Playback started in background thread...");
     }
 
     private final AudioFormat af;
@@ -28,19 +38,7 @@ public class Tone {
         this.af = af;
     }
 
-    void playSong(List<BellNote> song) throws LineUnavailableException {
-        try (final SourceDataLine line = AudioSystem.getSourceDataLine(af)) {
-            line.open();
-            line.start();
-
-            for (BellNote bn: song) {
-                playNote(line, bn);
-            }
-            line.drain();
-        }
-    }
-
-    public void playSongFromFile(String filename) throws Exception {
+    public void playSongFromFile(String filename) throws LineUnavailableException {
         List<BellNote> song = new ArrayList<>();
 
         // Catch the file - don't throw the exception
@@ -69,10 +67,43 @@ public class Tone {
 
                 song.add(new BellNote(note, length)); // Uses existing BellNote class
             }
+        } catch (IOException e) {
+            // handle IOException
+        } catch (NumberFormatException f) {
+            // handle NumberFormatException
+        } catch (IllegalArgumentException i) {
+            // handle IllegalArgumentException
+        } catch (NullPointerException j) {
+            // handle NullPointerException
         }
 
         // Play the parsed song using existing playSong method
         playSong(song);
+    }
+
+    private void playSong(List<BellNote> song) {
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+        long delay = 0;
+
+        for (BellNote bn : song) {
+            final BellNote note = bn;
+            executor.schedule(() -> {
+                try {
+                    playNote(note);
+                } catch (LineUnavailableException e) {
+                    e.printStackTrace();
+                }
+            }, delay, TimeUnit.MILLISECONDS);
+
+            delay += bn.length.timeMs();
+        }
+
+        try {
+            executor.awaitTermination(delay, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        executor.shutdown();
     }
 
     private NoteLength mapDurationToNoteLength(int duration) {
@@ -85,12 +116,16 @@ public class Tone {
         };
     }
 
-
-    private void playNote(SourceDataLine line, BellNote bn) {
-        final int ms = Math.min(bn.length.timeMs(), Note.MEASURE_LENGTH_SEC * 1000);
-        final int length = Note.SAMPLE_RATE * ms / 1000;
-        line.write(bn.note.sample(), 0, length);
-        line.write(Note.REST.sample(), 0, 50);
+    private void playNote(BellNote bn) throws LineUnavailableException {
+        try (SourceDataLine line = AudioSystem.getSourceDataLine(af)) {
+            line.open();
+            line.start();
+            final int ms = Math.min(bn.length.timeMs(), Note.MEASURE_LENGTH_SEC * 1000);
+            final int length = Note.SAMPLE_RATE * ms / 1000;
+            line.write(bn.note.sample(), 0, length);
+            line.write(Note.REST.sample(), 0, 50);
+            line.drain();
+        }
     }
 }
 
@@ -105,15 +140,12 @@ class BellNote {
 }
 
 enum NoteLength {
-    WHOLE(1.0f),
-    HALF(0.5f),
-    QUARTER(0.25f),
-    EIGTH(0.125f);
+    WHOLE(1.0f), HALF(0.5f), QUARTER(0.25f), EIGTH(0.125f);
 
     private final int timeMs;
 
     private NoteLength(float length) {
-        timeMs = (int)(length * Note.MEASURE_LENGTH_SEC * 1000);
+        timeMs = (int) (length * Note.MEASURE_LENGTH_SEC * 1000);
     }
 
     public int timeMs() {
@@ -123,22 +155,7 @@ enum NoteLength {
 
 enum Note {
     // REST Must be the first 'Note'
-    REST,
-
-    // Octave 2
-    C2, C2S, D2, D2S, E2, F2, F2S, G2, G2S, A2, A2S, B2,
-
-    // Octave 3
-    C3, C3S, D3, D3S, E3, F3, F3S, G3, G3S, A3, A3S, B3,
-
-    // Octave 4
-    C4, C4S, D4, D4S, E4, F4, F4S, G4, G4S, A4, A4S, B4,
-
-    // Octave 5
-    C5, C5S, D5, D5S, E5, F5, F5S, G5, G5S, A5, A5S, B5,
-
-    // Octave 6
-    C6;
+    REST, A4, A4S, B4, C4, C4S, D4, D4S, E4, F4, F4S, G4, G4S, A5, B5, C5, C5S, D5, E5, E5S, F5, G5, C6;
 
     public static final int SAMPLE_RATE = 48 * 1024; // ~48KHz
     public static final int MEASURE_LENGTH_SEC = 1;
@@ -155,14 +172,14 @@ enum Note {
         int n = this.ordinal();
         if (n > 0) {
             // Calculate the frequency!
-            final double halfStepUpFromA = n - 1 - 36; // Adjust for C2 being index 1
+            final double halfStepUpFromA = n - 1;
             final double exp = halfStepUpFromA / 12.0d;
             final double freq = FREQUENCY_A_HZ * Math.pow(2.0d, exp);
 
             // Create sinusoidal data sample for the desired frequency
             final double sinStep = freq * step_alpha;
             for (int i = 0; i < sinSample.length; i++) {
-                sinSample[i] = (byte)(Math.sin(i * sinStep) * MAX_VOLUME);
+                sinSample[i] = (byte) (Math.sin(i * sinStep) * MAX_VOLUME);
             }
         }
     }
